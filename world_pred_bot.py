@@ -18,7 +18,10 @@ HEADERS = {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/125.0.0.0 Safari/537.36"
-    )
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Referer": "https://www.kicktipp.com/",
 }
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
@@ -44,59 +47,72 @@ def fetch_matrix():
     r = requests.get(URL, headers=HEADERS, timeout=15)
     r.raise_for_status()
     soup = BeautifulSoup(r.text, "html.parser")
-    text = soup.get_text("\n")
 
+    # Find the leaderboard table — it's the one with match column headers
+    # like "MEX RSA 0-0" or "KOR CZE ---"
     match_labels  = []
     match_results = []
     players = []
-    header_found = False
-    num_matches  = 0
 
-    for line in text.splitlines():
-        line = line.strip()
-        if not line.startswith("|") or not line.endswith("|"):
+    for table in soup.find_all("table"):
+        rows = table.find_all("tr")
+        if not rows:
             continue
-        if re.match(r'^\|[-| ]+\|$', line):
-            continue
-        cells = [c.strip() for c in line.split("|")[1:-1]]
 
-        if not header_found:
-            cols_l, cols_r = [], []
+        # Look for the header row containing match columns
+        header_row = None
+        for row in rows:
+            cells = [c.get_text(strip=True) for c in row.find_all(["th", "td"])]
+            match_cols = []
             for cell in cells:
                 m = re.match(r'^([A-Z]{2,4})\s+([A-Z]{2,4})\s+([\d]+-[\d]+|---)$', cell)
                 if m:
-                    cols_l.append(f"{m.group(1)} {m.group(2)}")
-                    cols_r.append(m.group(3))
-            if cols_l:
-                match_labels  = cols_l
-                match_results = cols_r
-                num_matches   = len(cols_l)
-                header_found  = True
+                    match_cols.append(m)
+            if match_cols:
+                header_row = row
+                for m in match_cols:
+                    match_labels.append(f"{m.group(1)} {m.group(2)}")
+                    match_results.append(m.group(3))
+                break
+
+        if not header_row:
             continue
 
-        pos = cells[0].replace(".", "").strip()
-        if not pos.isdigit():
-            continue
-        name = cells[2].strip() if len(cells) > 2 else ""
-        if not name:
-            continue
+        num_matches = len(match_labels)
 
-        preds = []
-        for i in range(num_matches):
-            col = 3 + i
-            raw = cells[col] if col < len(cells) else ""
-            preds.append(clean_pred(raw))
+        # Parse player rows
+        for row in rows:
+            if row is header_row:
+                continue
+            cells = [c.get_text(strip=True) for c in row.find_all("td")]
+            if len(cells) < 4:
+                continue
+            pos = cells[0].replace(".", "").strip()
+            if not pos.isdigit():
+                continue
+            name = cells[2].strip()
+            if not name:
+                continue
 
-        pts   = cells[-4].strip() if len(cells) >= 4 else "0"
-        total = cells[-1].strip() if cells             else "0"
+            preds = []
+            for i in range(num_matches):
+                col = 3 + i
+                raw = cells[col] if col < len(cells) else ""
+                preds.append(clean_pred(raw))
 
-        players.append({
-            "pos":   int(pos),
-            "name":  name,
-            "preds": preds,
-            "pts":   pts   or "0",
-            "total": total or "0",
-        })
+            pts   = cells[-4].strip() if len(cells) >= 4 else "0"
+            total = cells[-1].strip() if cells             else "0"
+
+            players.append({
+                "pos":   int(pos),
+                "name":  name,
+                "preds": preds,
+                "pts":   pts   or "0",
+                "total": total or "0",
+            })
+
+        if players:
+            break  # found the right table
 
     return match_labels, match_results, players
 
@@ -107,10 +123,9 @@ def build_table(match_labels, match_results, players):
 
     name_w = max(len(p["name"]) for p in players)
     name_w = max(name_w, 5)
+    col_w  = 5
 
-    # Short 3-letter col headers like MEX, KOR, CAN ...
     short = [lbl.split()[0][:3] for lbl in match_labels]
-    col_w = 5  # enough for "2-1" or "---"
 
     def row(name_col, pred_cols, pts_col, tot_col):
         return (
@@ -119,9 +134,9 @@ def build_table(match_labels, match_results, players):
             f"  {pts_col:>3}  {tot_col:>3}"
         )
 
-    header   = row("Name",  short,         " P ", " T ")
-    score_r  = row("Score", match_results, "   ", "   ")
-    divider  = "-" * len(header)
+    header  = row("Name",  short,         " P ", " T ")
+    score_r = row("Score", match_results, "   ", "   ")
+    divider = "-" * len(header)
 
     lines = ["🏆 *WorldPrediction2026*\n", "```"]
     lines.append(header)
@@ -133,12 +148,22 @@ def build_table(match_labels, match_results, players):
         lines.append(row(p["name"], preds, p["pts"], p["total"]))
 
     lines.append("```")
+    lines.append("_\\- = no prediction yet_")
     return "\n".join(lines)
 
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 *WorldPrediction2026 Bot*\n\nUse /leaderboard to see the prediction matrix.",
+        "👋 *WorldPrediction2026 Bot*\n\nUse /leaderboard to see the prediction matrix.\n\nType /help for all commands.",
+        parse_mode="Markdown"
+    )
+
+async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📖 *Commands*\n\n"
+        "/leaderboard — Full prediction matrix showing everyone's tips for each match, the actual score, and current points\n\n"
+        "/start — Welcome message\n\n"
+        "/help — This message",
         parse_mode="Markdown"
     )
 
@@ -160,6 +185,7 @@ def main():
         return
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start",       cmd_start))
+    app.add_handler(CommandHandler("help",        cmd_help))
     app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
     logger.info("Bot is running…")
     app.run_polling()
