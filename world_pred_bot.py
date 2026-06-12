@@ -165,7 +165,7 @@ def build_table(match_labels, match_results, players):
     if not match_labels or not players:
         return "⚠️ No data found. Try again later."
 
-    name_w = 8   # truncate names to 8 chars
+    name_w = 7   # truncate names to 7 chars
     col_w  = 3   # "2-0" and "---" are both 3 chars
 
     home_teams = [lbl.split()[0][:3] for lbl in match_labels]
