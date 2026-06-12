@@ -165,23 +165,21 @@ def build_table(match_labels, match_results, players):
     if not match_labels or not players:
         return "⚠️ No data found. Try again later."
 
-    name_w = max(len(p["name"]) for p in players)
-    name_w = max(name_w, 5)
-    col_w  = 5
+    name_w = 8   # truncate names to 8 chars
+    col_w  = 3   # "2-0" and "---" are both 3 chars
 
-    # Short 3-letter col headers
-    short = [lbl.split()[0] for lbl in match_labels]
+    short = [lbl.split()[0][:3] for lbl in match_labels]  # MEX, KOR, ...
 
     def make_row(name_col, pred_cols, pts_col, tot_col):
         return (
-            name_col.ljust(name_w) + "  " +
-            "  ".join(c.center(col_w) for c in pred_cols) +
-            f"  {pts_col:>3}  {tot_col:>3}"
+            name_col[:name_w].ljust(name_w) + " " +
+            " ".join(c.center(col_w) for c in pred_cols) +
+            f" {pts_col:>2} {tot_col:>2}"
         )
 
-    header   = make_row("Name",  short,         " P ", " T ")
-    score_r  = make_row("Score", match_results, "   ", "   ")
-    divider  = "-" * len(header)
+    header  = make_row("Name",  short,         "P", "T")
+    score_r = make_row("Score", match_results, " ", " ")
+    divider = "-" * len(header)
 
     lines = ["🏆 *WorldPrediction2026*\n", "```"]
     lines.append(header)
@@ -193,7 +191,7 @@ def build_table(match_labels, match_results, players):
         lines.append(make_row(p["name"], preds, p["md_pts"], p["total"]))
 
     lines.append("```")
-    lines.append("_\\- = no prediction yet_")
+    lines.append("_\\- = no prediction yet · P = matchday pts · T = total_")
     return "\n".join(lines)
 
 
