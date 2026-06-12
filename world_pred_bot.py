@@ -143,7 +143,6 @@ def fetch_matrix():
                 preds.append(pred)
                 pts_list.append(pts)
 
-            md_pts = cells[-4].strip() if len(cells) >= 4 else "0"
             total  = cells[-1].strip() if cells             else "0"
 
             players.append({
@@ -151,7 +150,6 @@ def fetch_matrix():
                 "name":   name,
                 "preds":  preds,
                 "pts":    pts_list,
-                "md_pts": md_pts or "0",
                 "total":  total  or "0",
             })
 
@@ -171,16 +169,16 @@ def build_table(match_labels, match_results, players):
     home_teams = [lbl.split()[0][:3] for lbl in match_labels]
     away_teams = [lbl.split()[1][:3] if len(lbl.split()) > 1 else "   " for lbl in match_labels]
 
-    def make_row(name_col, pred_cols, pts_col, tot_col):
+    def make_row(name_col, pred_cols, tot_col):
         return (
             name_col[:name_w].ljust(name_w) + " " +
             " ".join(c.center(col_w) for c in pred_cols) +
-            f" {pts_col:>2} {tot_col:>2}"
+            f" {tot_col:>2}"
         )
 
-    header1 = make_row("",      home_teams,    " ", " ")
-    header2 = make_row("",      away_teams,    "P", "T")
-    score_r = make_row("Score", match_results, " ", " ")
+    header1 = make_row("",      home_teams,    " ")
+    header2 = make_row("",      away_teams,    "T")
+    score_r = make_row("Score", match_results, " ")
     divider = "-" * len(header1)
 
     lines = ["🏆 *WorldPrediction2026*\n", "```"]
@@ -191,10 +189,10 @@ def build_table(match_labels, match_results, players):
 
     for p in players:
         preds = [p["preds"][i] if i < len(p["preds"]) else "-" for i in range(len(match_labels))]
-        lines.append(make_row(p["name"], preds, p["md_pts"], p["total"]))
+        lines.append(make_row(p["name"], preds, p["total"]))
 
     lines.append("```")
-    lines.append("_\\- = no prediction yet · P = matchday pts · T = total_")
+    lines.append("_\\- = no prediction yet · T = total_")
     return "\n".join(lines)
 
 
