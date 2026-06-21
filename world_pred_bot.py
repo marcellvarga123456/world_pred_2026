@@ -1,7 +1,7 @@
 """
 Kicktipp WorldPrediction2026 — Telegram Bot
 /leaderboard — shows the prediction matrix exactly as on the website
-/bonus       — shows the bonus questions matrix
+/bonus       — shows the bonus questions (one message per question)
 """
 
 import os
@@ -34,40 +34,24 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def parse_header_cell(cell):
-    """
-    Parse a header cell like 'MEXRSA2-0' or 'QATCH---' into (label, result).
-    Format: TEAM1(3chars) + TEAM2(2-4chars) + score_or_dashes
-    """
     m = re.match(r'^([A-Z]+)([\d]+-[\d]+|---)$', cell)
     if not m:
         return None, None
     teams  = m.group(1)
     result = m.group(2)
-    t1 = teams[:3]
-    t2 = teams[3:]
+    t1, t2 = teams[:3], teams[3:]
     if not t2:
         return None, None
     return f"{t1} {t2}", result
 
 
 def split_pred(raw):
-    """
-    Kicktipp concatenates prediction + points earned into one string:
-      '2-09' -> pred='2-0', pts='9'
-      '1-03' -> pred='1-0', pts='3'
-      '2-19' -> pred='2-1', pts='9'
-      '1-1'  -> pred='1-1', pts=''   (match not finished yet)
-      '---'  -> pred='---', pts=''
-      ''     -> pred='-',   pts=''
-    Rule: away score is always exactly 1 digit; extra digits are points.
-    """
     raw = raw.strip()
     if not raw or raw == "---":
         return raw or "-", ""
     m = re.match(r'^(\d+)-(\d+)$', raw)
     if m:
-        home     = m.group(1)
-        away_pts = m.group(2)
+        home, away_pts = m.group(1), m.group(2)
         if len(away_pts) > 1:
             return f"{home}-{away_pts[0]}", away_pts[1:]
         return f"{home}-{away_pts}", ""
@@ -75,23 +59,11 @@ def split_pred(raw):
 
 
 def split_bonus(raw):
-    """
-    Split a bonus answer cell into (answer, points_earned).
-
-    Kicktipp concatenates the answer and points:
-      'GER9'   -> answer='GER',    pts='9'
-      'France' -> answer='France',  pts=''  (not yet scored)
-      '127'    -> answer='127',     pts=''  (numeric answer, not scored)
-      '---'    -> answer='---',     pts=''
-      ''       -> answer='-',       pts=''
-    """
     raw = raw.strip()
     if not raw or raw in ("---", "-"):
         return raw or "-", ""
-    # Purely numeric → treat as answer, not points
     if raw.isdigit():
         return raw, ""
-    # Text ending with 1-2 digits → split as answer + points
     m = re.match(r'^(.+?)(\d{1,2})$', raw)
     if m and not m.group(1).isdigit():
         return m.group(1), m.group(2)
@@ -99,7 +71,7 @@ def split_bonus(raw):
 
 
 # ---------------------------------------------------------------------------
-# /leaderboard
+# /leaderboard  (unchanged)
 # ---------------------------------------------------------------------------
 
 def fetch_matrix():
@@ -107,19 +79,13 @@ def fetch_matrix():
     r.raise_for_status()
     soup = BeautifulSoup(r.text, "html.parser")
 
-    match_labels  = []
-    match_results = []
-    players = []
+    match_labels, match_results, players = [], [], []
 
     for table in soup.find_all("table"):
         rows = table.find_all("tr")
         if not rows:
             continue
-
-        # Find the header row: contains cells matching TEAM1TEAM2score pattern
-        header_row  = None
-        num_matches = 0
-
+        header_row, num_matches = None, 0
         for row in rows:
             cells = [c.get_text(strip=True) for c in row.find_all(["th", "td"])]
             labels, results = [], []
@@ -129,16 +95,11 @@ def fetch_matrix():
                     labels.append(label)
                     results.append(result)
             if labels:
-                match_labels  = labels
-                match_results = results
-                num_matches   = len(labels)
-                header_row    = row
+                match_labels, match_results = labels, results
+                num_matches, header_row = len(labels), row
                 break
-
         if not header_row:
             continue
-
-        # Parse player rows
         for row in rows:
             if row is header_row:
                 continue
@@ -151,66 +112,39 @@ def fetch_matrix():
             name = cells[2].strip()
             if not name:
                 continue
-
-            preds = []
-            pts_list = []
+            preds, pts_list = [], []
             for i in range(num_matches):
-                col = 3 + i
-                raw = cells[col] if col < len(cells) else ""
+                raw = cells[3 + i] if 3 + i < len(cells) else ""
                 pred, pts = split_pred(raw)
                 preds.append(pred)
                 pts_list.append(pts)
-
-            total  = cells[-1].strip() if cells else "0"
-
             players.append({
-                "pos":    int(pos),
-                "name":   name,
-                "preds":  preds,
-                "pts":    pts_list,
-                "total":  total  or "0",
+                "pos": int(pos), "name": name,
+                "preds": preds, "pts": pts_list,
+                "total": cells[-1].strip() or "0",
             })
-
         if players:
             break
-
     return match_labels, match_results, players
 
 
 def build_table(match_labels, match_results, players):
     if not match_labels or not players:
         return "⚠️ No data found. Try again later."
+    name_w, col_w = 7, 3
+    home = [l.split()[0][:3] for l in match_labels]
+    away = [l.split()[1][:3] if len(l.split()) > 1 else "   " for l in match_labels]
 
-    name_w = 7   # truncate names to 7 chars
-    col_w  = 3   # "2-0" and "---" are both 3 chars
+    def row(n, cols, t):
+        return n[:name_w].ljust(name_w) + " " + " ".join(c.center(col_w) for c in cols) + f" {t:>2}"
 
-    home_teams = [lbl.split()[0][:3] for lbl in match_labels]
-    away_teams = [lbl.split()[1][:3] if len(lbl.split()) > 1 else "   " for lbl in match_labels]
-
-    def make_row(name_col, pred_cols, tot_col):
-        return (
-            name_col[:name_w].ljust(name_w) + " "
-            + " ".join(c.center(col_w) for c in pred_cols)
-            + f" {tot_col:>2}"
-        )
-
-    header1 = make_row("",      home_teams,    " ")
-    header2 = make_row("",      away_teams,    "T")
-    score_r = make_row("Score", match_results, " ")
-    divider = "-" * len(header1)
-
-    lines = ["🏆 *WorldPrediction2026*\n", "```"]
-    lines.append(header1)
-    lines.append(header2)
-    lines.append(score_r)
-    lines.append(divider)
-
+    lines = ["🏆 *WorldPrediction2026*\n", "```",
+             row("", home, " "), row("", away, "T"),
+             row("Score", match_results, " "), "-" * len(row("", home, " "))]
     for p in players:
         preds = [p["preds"][i] if i < len(p["preds"]) else "-" for i in range(len(match_labels))]
-        lines.append(make_row(p["name"], preds, p["total"]))
-
-    lines.append("```")
-    lines.append("_\\- = no prediction yet · T = total_")
+        lines.append(row(p["name"], preds, p["total"]))
+    lines += ["```", "_\\- = no prediction yet · T = total_"]
     return "\n".join(lines)
 
 
@@ -219,55 +153,43 @@ def build_table(match_labels, match_results, players):
 # ---------------------------------------------------------------------------
 
 def fetch_bonus_matrix():
-    """Fetch and parse the bonus questions leaderboard page."""
     r = requests.get(URL + "?bonus=true", headers=HEADERS, timeout=15)
     r.raise_for_status()
     soup = BeautifulSoup(r.text, "html.parser")
 
-    bonus_labels    = []
-    correct_answers = []
-    players         = []
+    bonus_labels, correct_answers, players = [], [], []
 
     for table in soup.find_all("table"):
         rows = table.find_all("tr")
         if not rows:
             continue
+        header_row, num_bonus = None, 0
 
-        header_row = None
-        num_bonus  = 0
-
-        # Identify header row: cells 3+ contain bonus question labels
         for row in rows:
             cells = [c.get_text(strip=True) for c in row.find_all(["th", "td"])]
             if len(cells) < 4:
                 continue
             labels = cells[3:]
-            non_empty = [l for l in labels if l.strip()]
-            if not non_empty:
+            if not any(l.strip() for l in labels):
                 continue
-            # Skip rows that look like match-prediction headers
             if any(re.match(r'^[A-Z]+(\d+-\d+|---)$', l) for l in labels):
                 continue
-            bonus_labels = labels
-            num_bonus    = len(labels)
-            header_row   = row
+            bonus_labels, num_bonus, header_row = labels, len(labels), row
             break
 
         if not header_row:
             continue
 
-        # Collect rows after the header
         remaining = [row for row in rows if row is not header_row]
 
-        # Check if the first remaining row is a "correct answer" row
+        # optional "correct answer" row right after header
         if remaining:
-            first_cells = [c.get_text(strip=True) for c in remaining[0].find_all(["th", "td"])]
-            first_pos = first_cells[0].replace(".", "").strip() if first_cells else ""
-            if not first_pos.isdigit() and len(first_cells) >= 4:
-                correct_answers = first_cells[3:3 + num_bonus]
+            fc = [c.get_text(strip=True) for c in remaining[0].find_all(["th", "td"])]
+            fp = fc[0].replace(".", "").strip() if fc else ""
+            if not fp.isdigit() and len(fc) >= 4:
+                correct_answers = fc[3:3 + num_bonus]
                 remaining = remaining[1:]
 
-        # Parse player rows
         for row in remaining:
             cells = [c.get_text(strip=True) for c in row.find_all("td")]
             if len(cells) < 4:
@@ -278,68 +200,71 @@ def fetch_bonus_matrix():
             name = cells[2].strip()
             if not name:
                 continue
-
-            answers  = []
-            pts_list = []
+            answers, pts_list = [], []
             for i in range(num_bonus):
-                col = 3 + i
-                raw = cells[col] if col < len(cells) else ""
-                answer, pts = split_bonus(raw)
-                answers.append(answer)
-                pts_list.append(pts)
-
-            total = cells[-1].strip() if cells else "0"
-
+                raw = cells[3 + i] if 3 + i < len(cells) else ""
+                a, pt = split_bonus(raw)
+                answers.append(a)
+                pts_list.append(pt)
+            # last cell: total if numeric, otherwise compute from pts_list
+            last = cells[-1].strip() if cells else "0"
+            if last.isdigit():
+                total = last
+            else:
+                total = str(sum(int(pt) for pt in pts_list if pt.isdigit()))
             players.append({
-                "pos":     int(pos),
-                "name":    name,
-                "answers": answers,
-                "pts":     pts_list,
-                "total":   total or "0",
+                "pos": int(pos), "name": name,
+                "answers": answers, "pts": pts_list,
+                "total": total,
             })
-
         if players:
             break
 
     return bonus_labels, correct_answers, players
 
 
-def build_bonus_table(bonus_labels, correct_answers, players):
-    """Build a monospace table string for the bonus leaderboard."""
+def build_bonus_messages(bonus_labels, correct_answers, players):
+    """Return a list of message strings — one per question + a totals summary."""
     if not bonus_labels or not players:
-        return "⚠️ No bonus data found. Try again later."
+        return ["⚠️ No bonus data found. Try again later."]
 
-    name_w = 7
-    col_w  = 7   # wider than match cols to fit text answers
+    messages = []
 
-    def make_row(name_col, data_cols, tot_col):
-        return (
-            name_col[:name_w].ljust(name_w) + " "
-            + " ".join(c[:col_w].center(col_w) for c in data_cols)
-            + f" {tot_col:>2}"
-        )
+    for idx, label in enumerate(bonus_labels):
+        correct = None
+        if idx < len(correct_answers) and correct_answers[idx] not in ("-", "---", ""):
+            correct = correct_answers[idx]
 
-    header  = make_row("",       bonus_labels,    "T")
-    divider = "-" * len(header)
+        lines = [f"📌 *{label}*"]
+        if correct:
+            lines.append(f"✅ Answer: {correct}")
+        lines.append("")
 
-    lines = ["🏆 *WorldPrediction2026 — Bonus*\n", "```"]
-    lines.append(header)
+        for p in players:
+            answer = p["answers"][idx] if idx < len(p["answers"]) else "-"
+            pts    = p["pts"][idx]    if idx < len(p["pts"])    else ""
 
-    if correct_answers:
-        lines.append(make_row("Answer", correct_answers, " "))
+            if correct and answer not in ("-", "---"):
+                if pts and int(pts) > 0:
+                    status = f"✅ {pts}pts"
+                elif pts == "0":
+                    status = "❌ 0pts"
+                else:
+                    status = "·"
+            else:
+                status = "·"
 
-    lines.append(divider)
+            lines.append(f"{p['pos']}. {p['name']} — {answer} {status}")
 
+        messages.append("\n".join(lines))
+
+    # totals summary
+    sum_lines = ["📊 *Bonus Totals*", ""]
     for p in players:
-        answers = [
-            p["answers"][i] if i < len(p["answers"]) else "-"
-            for i in range(len(bonus_labels))
-        ]
-        lines.append(make_row(p["name"], answers, p["total"]))
+        sum_lines.append(f"{p['pos']}. {p['name']} — {p['total']}pts")
+    messages.append("\n".join(sum_lines))
 
-    lines.append("```")
-    lines.append("_\\- = no answer yet · T = total bonus pts_")
-    return "\n".join(lines)
+    return messages
 
 
 # ---------------------------------------------------------------------------
@@ -352,7 +277,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "Use /leaderboard to see the prediction matrix.\n"
         "Use /bonus to see bonus question answers.\n\n"
         "Type /help for all commands.",
-        parse_mode="Markdown"
+        parse_mode="Markdown",
     )
 
 
@@ -361,23 +286,23 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "📖 *Commands*\n\n"
         "/leaderboard — Full prediction matrix showing everyone's tips "
         "for each match, the actual score, and current points\n\n"
-        "/bonus — Bonus questions matrix showing everyone's answers "
-        "to bonus questions and points earned\n\n"
+        "/bonus — Bonus questions: one message per question showing "
+        "all players' answers and points earned\n\n"
         "/start — Welcome message\n\n"
         "/help — This message",
-        parse_mode="Markdown"
+        parse_mode="Markdown",
     )
 
 
 async def cmd_leaderboard(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Fetching…")
     try:
-        match_labels, match_results, players = fetch_matrix()
-        text = build_table(match_labels, match_results, players)
+        ml, mr, pl = fetch_matrix()
+        text = build_table(ml, mr, pl)
     except Exception as e:
         logger.error(e)
         text = f"❌ Error: {e}"
-    for chunk in [text[i:i+4096] for i in range(0, len(text), 4096)]:
+    for chunk in [text[i:i + 4096] for i in range(0, len(text), 4096)]:
         await update.message.reply_text(chunk, parse_mode="Markdown")
 
 
@@ -385,12 +310,13 @@ async def cmd_bonus(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Fetching bonus…")
     try:
         bonus_labels, correct_answers, players = fetch_bonus_matrix()
-        text = build_bonus_table(bonus_labels, correct_answers, players)
+        messages = build_bonus_messages(bonus_labels, correct_answers, players)
     except Exception as e:
         logger.error(e)
-        text = f"❌ Error: {e}"
-    for chunk in [text[i:i+4096] for i in range(0, len(text), 4096)]:
-        await update.message.reply_text(chunk, parse_mode="Markdown")
+        messages = [f"❌ Error: {e}"]
+    for msg in messages:
+        for chunk in [msg[i:i + 4096] for i in range(0, len(msg), 4096)]:
+            await update.message.reply_text(chunk, parse_mode="Markdown")
 
 
 # ---------------------------------------------------------------------------
