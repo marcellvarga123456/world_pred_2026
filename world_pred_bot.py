@@ -351,21 +351,20 @@ def build_bonus_image(question_texts, correct_answers, players):
     # 2. Plot with Matplotlib
     num_rows, num_cols = df.shape
     
-    # Make the physical figure size MUCH larger to prevent squishing
+    # Make the physical figure size large so text isn't squished
     fig_width = max(16, num_cols * 3.5)  
     fig_height = max(6, num_rows * 0.8) 
     
     fig, ax = plt.subplots(figsize=(fig_width, fig_height))
     ax.axis('off')
-    ax.axis('tight')
 
     # Create table
     table = ax.table(cellText=df.values, colLabels=df.columns, loc='center', cellLoc='center')
     
     # 3. HIGH-RES Styling
     table.auto_set_font_size(False)
-    table.set_fontsize(14)          # Large readable font
-    table.scale(1, 2.2)             # Increased row height for breathing room
+    table.set_fontsize(14)          
+    table.scale(1, 2.2)             
 
     for (row, col), cell in table.get_celld().items():
         cell.set_edgecolor('#CCCCCC')
@@ -379,14 +378,18 @@ def build_bonus_image(question_texts, correct_answers, players):
         else:  # Player rows
             cell.set_facecolor('#F9F9F9' if row % 2 == 0 else '#FFFFFF')
 
-    # Add padding around the table
-    plt.subplots_adjust(left=0.02, right=0.98, top=0.95, bottom=0.05)
-    
-    # 4. Save to memory buffer at HIGH DPI (No bbox_inches='tight' to prevent squishing)
     buf = BytesIO()
-    plt.savefig(buf, format="PNG", dpi=250, facecolor='white', pad_inches=0.5)
+    
+    # MUST use bbox_inches='tight' for tables to avoid 0x0 dimensions (invalid_dimensions error)
+    # dpi=200 gives crisp text without exceeding Telegram's 10MB/10000px limits
+    plt.savefig(buf, format="PNG", dpi=200, bbox_inches='tight', facecolor='white')
     plt.close(fig)
     buf.seek(0)
+    
+    # Safety check: make sure buffer actually has image data
+    if buf.getbuffer().nbytes == 0:
+        return None
+        
     return buf
 
 
