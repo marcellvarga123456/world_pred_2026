@@ -1,13 +1,19 @@
 """
 Kicktipp WorldPrediction2026 — Telegram Bot
 /leaderboard — shows the prediction matrix exactly as on the website
-/bonus       — shows the bonus questions in a horizontally scrollable table
+/bonus       — takes the data and sends a perfectly formatted, zoomable IMAGE
 """
 
 import os
 import re
+import textwrap
 import logging
 import requests
+import pandas as pd
+import matplotlib
+matplotlib.use('Agg') # Required for servers without a screen/GUI
+import matplotlib.pyplot as plt
+from io import BytesIO
 from bs4 import BeautifulSoup
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
@@ -312,50 +318,75 @@ def fetch_bonus_matrix():
     return question_texts, correct_answers, players
 
 
-def build_bonus_table(question_texts, correct_answers, players):
+def _wrap(text, width=20):
+    """Wrap long strings with newlines so they stack inside table cells."""
+    return "\n".join(textwrap.wrap(str(text), width=width) or [''])
+
+
+def build_bonus_image(question_texts, correct_answers, players):
+    """Converts parsed bonus data into a high-quality PNG image."""
     if not question_texts or not players:
-        return "⚠️ No bonus data found. Try again later."
+        return None
 
-    name_w = 7
-    num_q = len(question_texts)
-    
-    # Dynamically calculate width per question column (max 15 chars)
-    col_widths = []
-    for i in range(num_q):
-        max_len = len(question_texts[i][:15])
-        if i < len(correct_answers):
-            max_len = max(max_len, len(correct_answers[i][:15]))
+    # 1. Build Data for Pandas
+    data = {}
+    for i, q in enumerate(question_texts):
+        col_data = []
+        # First row is the correct answer
+        ans = correct_answers[i] if i < len(correct_answers) and correct_answers[i] else "-"
+        col_data.append(f"✅ {_wrap(ans, 18)}")
+        
+        # Player answers
         for p in players:
-            ans = p["answers"][i] if i < len(p["answers"]) else "-"
-            max_len = max(max_len, len(str(ans)[:15]))
-        col_widths.append(max(max_len, 3)) # Minimum width of 3
+            a = p["answers"][i] if i < len(p["answers"]) else "-"
+            col_data.append(_wrap(a, 18))
+        data[q] = col_data
 
-    def row(name, cols, tot):
-        parts = [name[:name_w].ljust(name_w)]
-        for i, c in enumerate(cols):
-            parts.append(str(c)[:col_widths[i]].ljust(col_widths[i]))
-        parts.append(f"{tot:>3}")
-        return " ".join(parts)
+    index = ["Answer"] + [f"{p['pos']}. {p['name']}" for p in players]
+    df = pd.DataFrame(data, index=index)
 
-    lines = ["🏆 *WorldPrediction2026 — Bonus*\n", "```"]
+    # Add Total column
+    df["Total"] = [""] + [f"{p['total']} pts" for p in players]
+
+    # 2. Plot with Matplotlib
+    num_rows, num_cols = df.shape
     
-    # Row 1: Question texts
-    lines.append(row("Q", question_texts, "T"))
+    # Dynamically size the figure based on columns and rows to prevent squishing
+    fig_width = max(8, num_cols * 3.5)
+    fig_height = max(4, num_rows * 0.6)
     
-    # Row 2: Correct answers
-    ca_row = ["-" if not (i < len(correct_answers) and correct_answers[i]) else correct_answers[i] for i in range(num_q)]
-    lines.append(row("Ans", ca_row, " "))
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    ax.axis('off')
+    ax.axis('tight')
+
+    # Create table
+    table = ax.table(cellText=df.values, colLabels=df.columns, loc='center', cellLoc='center')
     
-    # Divider
-    lines.append("-" * len(row("Q", question_texts, "T")))
+    # 3. Styling
+    table.auto_set_font_size(False)
+    table.set_fontsize(9)
+    table.scale(1, 1.8) # Increase row height for readability
 
-    # Player rows
-    for p in players:
-        lines.append(row(p["name"], p["answers"], p["total"]))
+    for (row, col), cell in table.get_celld().items():
+        cell.set_edgecolor('#CCCCCC')
+        if row == 0:  # Header row (Questions)
+            cell.set_facecolor('#2E7D32') # Dark green
+            cell.set_text_props(weight='bold', color='white')
+            cell.set_height(0.08)
+        elif row == 1:  # Answer row
+            cell.set_facecolor('#E8F5E9') # Light green
+            cell.set_text_props(color='#2E7D32')
+        else:  # Player rows
+            cell.set_facecolor('#F9F9F9' if row % 2 == 0 else '#FFFFFF')
 
-    lines.append("```")
-    lines.append("_\\- = no answer yet · T = total bonus pts_")
-    return "\n".join(lines)
+    plt.tight_layout()
+    
+    # 4. Save to memory buffer
+    buf = BytesIO()
+    plt.savefig(buf, format="PNG", bbox_inches='tight', dpi=150, facecolor='white')
+    plt.close(fig)
+    buf.seek(0)
+    return buf
 
 
 # ---------------------------------------------------------------------------
@@ -366,7 +397,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 *WorldPrediction2026 Bot*\n\n"
         "Use /leaderboard to see the prediction matrix.\n"
-        "Use /bonus to see bonus question answers.\n\n"
+        "Use /bonus to see bonus questions as an image.\n\n"
         "Type /help for all commands.",
         parse_mode="Markdown",
     )
@@ -375,9 +406,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📖 *Commands*\n\n"
-        "/leaderboard — Full prediction matrix showing everyone's tips "
-        "for each match, the actual score, and current points\n\n"
-        "/bonus — Bonus questions matrix (swipe left to scroll)\n\n"
+        "/leaderboard — Full prediction matrix (text)\n\n"
+        "/bonus — Bonus questions matrix sent as a zoomable image\n\n"
         "/start — Welcome message\n\n"
         "/help — This message",
         parse_mode="Markdown",
@@ -397,15 +427,23 @@ async def cmd_leaderboard(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_bonus(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⏳ Fetching bonus…")
+    await update.message.reply_text("⏳ Fetching bonus & generating image…")
     try:
         bonus_labels, correct_answers, players = fetch_bonus_matrix()
-        text = build_bonus_table(bonus_labels, correct_answers, players)
+        image_buffer = build_bonus_image(bonus_labels, correct_answers, players)
+        
+        if image_buffer:
+            await update.message.reply_photo(
+                photo=image_buffer, 
+                caption="🏆 *WorldPrediction2026 — Bonus Questions*", 
+                parse_mode="Markdown"
+            )
+        else:
+            await update.message.reply_text("⚠️ No bonus data found. Try again later.")
+            
     except Exception as e:
         logger.error(e)
-        text = f"❌ Error: {e}"
-    for chunk in [text[i:i + 4096] for i in range(0, len(text), 4096)]:
-        await update.message.reply_text(chunk, parse_mode="Markdown")
+        await update.message.reply_text(f"❌ Error: {e}")
 
 
 # ---------------------------------------------------------------------------
