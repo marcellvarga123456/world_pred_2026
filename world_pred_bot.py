@@ -178,23 +178,28 @@ def build_match_table(match_labels, match_results, players):
 
 # ── Bonus leaderboard ─────────────────────────────────────────────────────────
 
+SKIP_COLS = {'Pos', '+/-', 'Name', 'P', 'B', 'W', 'T'}
+
 def parse_bonus_header(cell):
     """
-    Bonus header cells: 'WC ---', 'Gr A MEX', 'SF ---'
-    Returns (abbr, result) e.g. ('WC', '---'), ('Gr A', 'MEX'), ('SF', '---')
+    Real bonus header cells: 'WC ---', 'Tor ---', 'Gr A MEX', 'Gr D USA', 'SF ---'
+    Split: everything before last word = abbr, last word = result.
     """
-    # Pattern: abbr (1-4 chars) + space + result (team abbr or ---)
-    m = re.match(r'^(WC|Tor|Gr [A-L]|SF)\s+(.+)$', cell)
-    if m:
-        result = m.group(2).strip()
-        if result == "---":
-            result = "·"
-        return m.group(1), result
-    return None, None
+    cell = cell.strip()
+    m = re.match(r'^(.+?)\s+(---|\w{2,})$', cell)
+    if not m:
+        return None, None
+    abbr   = m.group(1).strip()
+    result = m.group(2).strip()
+    if abbr in SKIP_COLS:
+        return None, None
+    if result == "---":
+        result = "·"
+    return abbr, result
 
 
 def fetch_bonus():
-    soup = get_soup(params={"bonus": "true"})
+    soup = get_soup(params={"tippsaisonId": "4343234", "bonus": "true"})
     bonus_labels, bonus_results, players = [], [], []
 
     for table in soup.find_all("table"):
