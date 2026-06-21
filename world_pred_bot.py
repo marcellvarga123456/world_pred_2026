@@ -1,12 +1,11 @@
 """
 Kicktipp WorldPrediction2026 — Telegram Bot
 /leaderboard — shows the prediction matrix exactly as on the website
-/bonus       — takes the data and sends a perfectly formatted, zoomable IMAGE
+/bonus       — shows the bonus questions as a high-res, zoomable IMAGE
 """
 
 import os
 import re
-import textwrap
 import logging
 import requests
 import pandas as pd
@@ -75,8 +74,14 @@ def split_bonus(raw):
     return raw, ""
 
 
+def _truncate(text, width=20):
+    """Truncate long strings cleanly so they don't break the table layout."""
+    text = str(text)
+    return (text[:width-2] + "..") if len(text) > width else text
+
+
 # ---------------------------------------------------------------------------
-# /leaderboard  (unchanged)
+# /leaderboard 
 # ---------------------------------------------------------------------------
 
 def fetch_matrix():
@@ -318,13 +323,8 @@ def fetch_bonus_matrix():
     return question_texts, correct_answers, players
 
 
-def _wrap(text, width=20):
-    """Wrap long strings with newlines so they stack inside table cells."""
-    return "\n".join(textwrap.wrap(str(text), width=width) or [''])
-
-
 def build_bonus_image(question_texts, correct_answers, players):
-    """Converts parsed bonus data into a high-quality PNG image."""
+    """Converts parsed bonus data into a HIGH-RESOLUTION PNG image."""
     if not question_texts or not players:
         return None
 
@@ -334,12 +334,12 @@ def build_bonus_image(question_texts, correct_answers, players):
         col_data = []
         # First row is the correct answer
         ans = correct_answers[i] if i < len(correct_answers) and correct_answers[i] else "-"
-        col_data.append(f"✅ {_wrap(ans, 18)}")
+        col_data.append(f"✅ {_truncate(ans, 18)}")
         
         # Player answers
         for p in players:
             a = p["answers"][i] if i < len(p["answers"]) else "-"
-            col_data.append(_wrap(a, 18))
+            col_data.append(_truncate(a, 18))
         data[q] = col_data
 
     index = ["Answer"] + [f"{p['pos']}. {p['name']}" for p in players]
@@ -351,9 +351,9 @@ def build_bonus_image(question_texts, correct_answers, players):
     # 2. Plot with Matplotlib
     num_rows, num_cols = df.shape
     
-    # Dynamically size the figure based on columns and rows to prevent squishing
-    fig_width = max(8, num_cols * 3.5)
-    fig_height = max(4, num_rows * 0.6)
+    # Make the physical figure size MUCH larger to prevent squishing
+    fig_width = max(16, num_cols * 3.5)  
+    fig_height = max(6, num_rows * 0.8) 
     
     fig, ax = plt.subplots(figsize=(fig_width, fig_height))
     ax.axis('off')
@@ -362,10 +362,10 @@ def build_bonus_image(question_texts, correct_answers, players):
     # Create table
     table = ax.table(cellText=df.values, colLabels=df.columns, loc='center', cellLoc='center')
     
-    # 3. Styling
+    # 3. HIGH-RES Styling
     table.auto_set_font_size(False)
-    table.set_fontsize(9)
-    table.scale(1, 1.8) # Increase row height for readability
+    table.set_fontsize(14)          # Large readable font
+    table.scale(1, 2.2)             # Increased row height for breathing room
 
     for (row, col), cell in table.get_celld().items():
         cell.set_edgecolor('#CCCCCC')
@@ -379,11 +379,12 @@ def build_bonus_image(question_texts, correct_answers, players):
         else:  # Player rows
             cell.set_facecolor('#F9F9F9' if row % 2 == 0 else '#FFFFFF')
 
-    plt.tight_layout()
+    # Add padding around the table
+    plt.subplots_adjust(left=0.02, right=0.98, top=0.95, bottom=0.05)
     
-    # 4. Save to memory buffer
+    # 4. Save to memory buffer at HIGH DPI (No bbox_inches='tight' to prevent squishing)
     buf = BytesIO()
-    plt.savefig(buf, format="PNG", bbox_inches='tight', dpi=150, facecolor='white')
+    plt.savefig(buf, format="PNG", dpi=250, facecolor='white', pad_inches=0.5)
     plt.close(fig)
     buf.seek(0)
     return buf
@@ -397,7 +398,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 *WorldPrediction2026 Bot*\n\n"
         "Use /leaderboard to see the prediction matrix.\n"
-        "Use /bonus to see bonus questions as an image.\n\n"
+        "Use /bonus to see bonus questions as a zoomable image.\n\n"
         "Type /help for all commands.",
         parse_mode="Markdown",
     )
@@ -407,7 +408,7 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📖 *Commands*\n\n"
         "/leaderboard — Full prediction matrix (text)\n\n"
-        "/bonus — Bonus questions matrix sent as a zoomable image\n\n"
+        "/bonus — Bonus questions matrix sent as a high-res image\n\n"
         "/start — Welcome message\n\n"
         "/help — This message",
         parse_mode="Markdown",
